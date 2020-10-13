@@ -1,0 +1,3 @@
+<launch>
+<node name="main_node" pkg="three_coleader_formation" type="Main_node.py" args="--test" />  
+</launch>

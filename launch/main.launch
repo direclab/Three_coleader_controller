@@ -1,0 +1,7 @@
+<launch>
+    <include file="$(find three_coleader_formation)/launch/groups.launch">
+
+    </include>
+  
+
+</launch>
