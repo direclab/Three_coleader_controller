@@ -56,8 +56,12 @@
     </gui>
 
     <!-- Green grass -->
-    <include>
+    <!-- <include>
       <uri>model://water_level2</uri>
+    </include>  -->
+
+       <include>
+      <uri>model://cyberzoo</uri>
     </include> 
 
 

@@ -1,10 +1,6 @@
 #!/usr/bin/env python
-
-
-
 import rospy
-
-from geometry_msgs.msg import Point, PoseStamped,TwistStamped
+from geometry_msgs.msg import Point, PoseStamped,TwistStamped, Twist
 from geometry_msgs.msg import Quaternion
 from tf.transformations import quaternion_from_euler
 from mavros_msgs.msg import *
@@ -58,6 +54,7 @@ TOPIC_SETPOINT = '/mavros/setpoint_position/local'
 TOPIC_SETVELOCITY = '/mavros/setpoint_velocity/cmd_vel'
 TOPIC_MODELSTATE = '/gazebo/model_states'
 TOPIC_SET_MODELSTATE =  '/gazebo/set_model_state'
+TOPIC_EKF =  '/ekf'
 
 TOPIC_IMGCOMPRESSED = "/camera_red_iris/image_raw/compressed"
 
@@ -69,6 +66,13 @@ IS_MOVED = False
 INDEX_MOVED = 0
 
 
+####################################
+############## Params ##############
+def setParams():
+    rospy.set_param('/idx_Permit_EKF',2) # Scale ratio (1/anchor_sep)
+    rospy.set_param('/S_covariance',0.002) # Covariance
+    rospy.set_param('/R_covariance',0.002) # Process covariance
+    rospy.set_param('/Q_covariance',0.005) # Measurement covariance
 
 
 
@@ -92,9 +96,24 @@ class FormationControl:
 		self.rate = rate
 		self.initial_pos = initial
 		rospy.rate = rate
-		self.fov = 0
+		self.fov = 1.3962634  # Field of view of the camera
 		# Coefficient  K for the update
 		self.k = 0.5
+		# Filter Params
+		self.idx_seq = 0
+		self.r1 = 0.
+		self.cov = np.zeros((len(names),2,2)) # Covariance
+		for i in range(len(names)):
+			self.cov[i,:,:] = 0.002*np.identity(2) #rospy.get_param('/S_covariance')*np.identity(2)
+		self.R_cov = 0.002*np.identity(2) #rospy.get_param('/R_covariance')*np.identity(2) # Process covariance
+		self.Q_cov = 0.005*np.identity(2) #rospy.get_param('/Q_covariance')*np.identity(2) # Measurement covariance
+		self.ctr_in = np.zeros((3,len(names))) # Control inputs of all agents
+		self.mup = np.zeros((2,len(names))) # Predicted mean
+		self.x_Ekf = np.array([[0.,0.,0.] , [0.,0.,0.]]) # EKF result (mu)
+		self.G = np.identity(2) # Auxiliary linearized model matrix
+		self.H = np.identity(2) # Linearized measurement matrix
+		self.y = np.array([[0.,0.,0.] , [0.,0.,0.]]) # Measurements
+		self.x_Ekf_Pub = Twist()
 
 		# initialization
 		self.setup()
@@ -107,8 +126,7 @@ class FormationControl:
 	        	self.fly()
 	        	y = y+1
 	        	rate.sleep()
-
-
+		self.pub_ekf = rospy.Publisher(TOPIC_EKF, Twist) # error distance
 
 		# # configuration boarding
 		# self.Onboarding()
@@ -127,6 +145,7 @@ class FormationControl:
 		return index
 			
 	# callBack gazebo Model states
+
 	def cb_model_state(self,state):
 		self.model_state = state
 
@@ -141,11 +160,12 @@ class FormationControl:
 		self.dr1 = self.model_state.pose[index_1].position    
 		self.dr2 = self.model_state.pose[index_2].position  
 		self.dr3 = self.model_state.pose[index_3].position 
-
+		# Transformation from  euler_from_quaternion
 		q1 = (self.model_state.pose[index_1].orientation.x,self.model_state.pose[index_1].orientation.y,self.model_state.pose[index_1].orientation.z,self.model_state.pose[index_1].orientation.w)  
 		q2 = (self.model_state.pose[index_2].orientation.x,self.model_state.pose[index_2].orientation.y,self.model_state.pose[index_2].orientation.z,self.model_state.pose[index_2].orientation.w)  
 		q3 = (self.model_state.pose[index_3].orientation.x,self.model_state.pose[index_3].orientation.y,self.model_state.pose[index_3].orientation.z,self.model_state.pose[index_3].orientation.w)  
 
+		## yaw from gazebo model state
 		self.yaw1 = tf.transformations.euler_from_quaternion(q1)[2] - pi/2.
 		self.yaw2 = tf.transformations.euler_from_quaternion(q2)[2] - pi/2.
 		self.yaw3 = tf.transformations.euler_from_quaternion(q3)[2] - pi/2.
@@ -189,70 +209,184 @@ class FormationControl:
 	# update according to the local frame	
 	def formationController(self,dv_1,dv_2,dv_3):
 		# self.agents[0].model_state   --- gazebo model state
-
 		dr1 = self.dr1 
 		dr2 = self.dr2  
-		dr3 = self.dr3 
-
-		noise = np.random.normal(0,0.1,1)  # noise
-		d1 = d2 = d3 = 6.    # desired distance between agents
-		self.k_psi = 1 # 0.2;
-		eta = np.random.normal(0,0.1,3)
-	    
-	    # Distances      
-		r1 =  hypot(dr1.x - dr2.x ,dr1.y - dr2.y ) #+  ta[0] # Current distance Agent1 - Agent2
-		r2 =  hypot(dr2.x - dr3.x ,dr2.y - dr3.y ) #+  eta[1]  # Current distance Agent2 - Agent3
-		r3 =  hypot(dr3.x - dr1.x ,dr3.y - dr1.y ) #+  eta[2]  # Current distance Agent3 - Agent1
-	    
-	     # Angles
-	    # the delta angle inside the triangle
-		self.alpha_1 =  np.arccos((r3*r3 + r1*r1 - r2*r2)/ (2*r3*r1))
-		self.alpha_2 =  np.arccos((r1*r1 + r2*r2 - r3*r3)/ (2*r1*r2))
-		self.alpha_3 =  np.arccos((r2*r2 + r3*r3 - r1*r1)/ (2*r2*r3))
-	    
-	   #  Controller
-		s1 =  -(d1 - r1) #  e1 error distance
-		s2 =  -(d2 - r2)  # e2 error distance
-		s3 =  -(d3 - r3) # e3 error distance
-
-
-		R1 = self.agents[0].position.pose.position 
-		R2 = self.agents[1].position.pose.position
-		R3 =  self.agents[2].position.pose.position  
-
+		dr3 = self.dr3
+		# Measurements
 		scale_ratio = (self.fov/2)/(800/2.0)
+		#print(scale_ratio)
 		self.beta_1 = dv_1*scale_ratio #detct1.beta #
 		self.beta_2 = dv_2*scale_ratio # detct2.beta
 		self.beta_3 = dv_3*scale_ratio # detct3.beta #
-		print('Beta ',self.beta_1,self.beta_2,self.beta_3)
+		print('Beta ',dv_1,dv_2,dv_3)
+		print('Beta ',dv_1*scale_ratio,dv_2*scale_ratio,dv_3*scale_ratio)
 
-		u_1 = np.array([ s1 * sin(self.beta_1),s1 * cos(self.beta_1)])
-		u_2 = np.array([ s2 * sin(self.beta_2),s2 * cos(self.beta_2)])
-		u_3 = np.array([ s3 * sin(self.beta_3),s3 * cos(self.beta_3)])
+		noise = np.random.normal(0,0.1,1)  # noise
+		d1 = d2 = d3 = 4.    # desired distance between agents
+		self.k_psi = 0.3 # 0.2;
+		eta = np.random.normal(0,0.1,3)
+
+		# Distances      
+		r1 =  hypot(dr1.x - dr2.x ,dr1.y - dr2.y ) +  eta[0] # Current distance Agent1 - Agent2
+		r2 =  hypot(dr2.x - dr3.x ,dr2.y - dr3.y ) +  eta[1]  # Current distance Agent2 - Agent3
+		r3 =  hypot(dr3.x - dr1.x ,dr3.y - dr1.y ) +  eta[2]  # Current distance Agent3 - Agent1
+		self.r1 = r1
+
+		# Filter params
+		self.y[0,0], self.y[1,0] = r1, self.beta_1
+		self.y[0,1], self.y[1,1] = r2, self.beta_2
+		self.y[0,2], self.y[1,2] = r3, self.beta_3
+
+		# Apply Filter
+		for i in range(len(self.dronesName)):
+			self.filter_ekf(i)
+		# Angles
+		# the delta angle inside the triangle 
+		self.alpha_1 =  np.arccos((r3*r3 + r1*r1 - r2*r2)/ (2*r3*r1))
+		self.alpha_2 =  np.arccos((r1*r1 + r2*r2 - r3*r3)/ (2*r1*r2))
+		self.alpha_3 =  np.arccos((r2*r2 + r3*r3 - r1*r1)/ (2*r2*r3))
+
+		# Controller
+		s1 =  -(d1 - self.x_Ekf[0,0]) # e1 error distance
+		s2 =  -(d2 - self.x_Ekf[0,1]) # e2 error distance
+		s3 =  -(d3 - self.x_Ekf[0,2]) # e3 error distance
+
+		# Agents from the Agent_node 
+		# Instance of Agent_node for R1,R2,R3
+		R1 = self.agents[0].position.pose.position # R1 
+		R2 = self.agents[1].position.pose.position # R2
+		R3 = self.agents[2].position.pose.position # R3
+
+		# Control signals
+		#u_1 = np.array([ s1 * sin(self.beta_1),s1 * cos(self.beta_1)])
+		#u_2 = np.array([ s2 * sin(self.beta_2),s2 * cos(self.beta_2)])
+		#u_3 = np.array([ s3 * sin(self.beta_3),s3 * cos(self.beta_3)])
+
+		u_1 = np.array([ s1 * sin(self.x_Ekf[1,0]),s1 * cos(self.x_Ekf[1,0])])
+		u_2 = np.array([ s2 * sin(self.x_Ekf[1,1]),s2 * cos(self.x_Ekf[1,1])])
+		u_3 = np.array([ s3 * sin(self.x_Ekf[1,2]),s3 * cos(self.x_Ekf[1,2])])
 
 		# For Local pose
-		x_1 = u_1[0] *TS #*self.k_psi
+		x_1 = u_1[0]*TS #*self.k_psi
 		y_1 = u_1[1]*TS #*self.k_psi
-	    
+
 		x_2 = u_2[0]*TS #*self.k_psi
 		y_2 = u_2[1]*TS #*self.k_psi
-	            
+		        
 		x_3 = u_3[0]*TS #*self.k_psi
 		y_3 = u_3[1]*TS #*self.k_psi
 
-
-		rate1 = -self.k_psi*self.beta_1;
+		# Next yaw rates 
+		rate1 = -self.k_psi*self.beta_1;  
 		rate2 = -self.k_psi*self.beta_2;
 		rate3 = -self.k_psi*self.beta_3;
+
+		# Control inputs to be used in filter
+		self.ctr_in[0][0], self.ctr_in[1][0], self.ctr_in[2][0] = x_1, y_1, rate1
+		self.ctr_in[0][1], self.ctr_in[1][1], self.ctr_in[2][1] = x_2, y_2, rate2
+		self.ctr_in[0][2], self.ctr_in[1][2], self.ctr_in[2][2] = x_3, y_3, rate3
+
 		# Next location publications
-		self.agents[0].setPoint(x_1 ,y_1,R1.z,rate1)
-		self.agents[1].setPoint(x_2 ,y_2,R2.z,rate2)
-		self.agents[2].setPoint(x_3 ,y_3,R3.z,rate3)
+		self.agents[0].setPoint(x_1 ,y_1,3.,rate1)
+		self.agents[1].setPoint(x_2 ,y_2,3.,rate2)
+		self.agents[2].setPoint(x_3 ,y_3,3.,rate3)
 
 		# # publish psi and beta --bag
 		self.agents[0].set_psi_beta(self.psi_1,self.beta_1,r1,s1)
 		self.agents[1].set_psi_beta(self.psi_2,self.beta_2,r2,s2)
 		self.agents[2].set_psi_beta(self.psi_3,self.beta_3,r3,s3)
+
+
+
+
+
+
+	######### Filtering #########################
+	#############################################
+	def filter_ekf(self,i):
+		# i: Agent index
+		S_cov = self.cov[i,:,:]
+		# Wait for some time before running EKF
+		if self.idx_seq < 2: #rospy.get_param('/idx_Permit_EKF'):
+			self.x_Ekf[:,i] = self.y[:,i]
+			return
+		# Propagate mu through the nonlinear motion model
+		self.motion_model_state(i)
+		# Prediction update
+		self.linearized_motion_model(i)
+		Sp = np.matmul(self.G,np.matmul(S_cov,np.transpose(self.G))) + self.R_cov
+
+		# Measurement update (H is identity)
+		LL = np.matmul(self.H , np.matmul(Sp , np.transpose(self.H))) + self.Q_cov
+		K = np.matmul(Sp , np.matmul(np.transpose(self.H) , np.linalg.inv(LL)))
+		# Predicted measurement
+		self.y_mdl = self.mup[:,i]
+		# Difference between current and predicted measurements
+		I = np.array([[self.y[0,i] - self.mup[0,i]] , [self.y[1,i] - self.mup[1,i]]])
+		print 'ekf: ', self.x_Ekf[:,i]
+		# Update belief
+		ekf_int = np.array([[self.mup[0,i]],[self.mup[1,i]]]) + np.matmul(K , I)
+		self.x_Ekf[0][i], self.x_Ekf[1][i] = ekf_int[0], ekf_int[1]
+		# Wrap phi between [-pi,pi)
+		self.x_Ekf[1][i] = self.mod_angle(self.x_Ekf[1][i])
+		#print self.R1_theta, self.R2_theta, self.x_Ekf[2][0], self.x_Ekf[3][0]
+
+		# Update covariance
+		self.cov[i,:,:] = np.matmul((np.identity(2) - np.matmul(K , self.H)) , Sp)
+		# Publish the estimated state
+		self.x_Ekf_Pub.linear.x = self.r1
+		self.x_Ekf_Pub.linear.y = self.x_Ekf[0][0]
+		self.x_Ekf_Pub.angular.x = self.beta_1
+		self.x_Ekf_Pub.angular.y = self.x_Ekf[1][0]
+		#self.header_main.seq = self.idx_seq
+		#self.header_main.stamp = rospy.Time.now() # Current time as rosTime
+		#print self.x_Ekf
+
+
+
+	### State model ###
+	### X = [d_i,phi_i], U = [vx_i, vy_i, omega_i]
+	# d_i,phi_i = x_Ekf[:,i]
+	# vx, vy, omega = ctr_in[0:2,i]
+	def motion_model_state(self,i):
+		# Parameters
+		d, phi = self.x_Ekf[0][i], self.x_Ekf[1][i]
+		vx, vy, omega = self.ctr_in[0][i], self.ctr_in[1][i], self.ctr_in[2][i]
+		# Motion model of the relative state
+		self.mup[0][i] = d + (-vx*math.sin(phi) - vy*math.cos(phi))*TS
+		self.mup[1][i] = phi + omega*TS + (1./d)*(-vx*math.cos(phi) + vy*math.sin(phi))*TS
+		return 0
+
+
+
+	### Linearized motion model ###
+	### X = [d_i,phi_i], U = [vx_i, vy_i, omega_i]
+	# d_i,phi_i = x_Ekf[:,i]
+	# vx, vy, omega = ctr_in[0:2,i]
+	def linearized_motion_model(self,i):
+		# Parameters
+		d, phi = self.mup[0][i], self.mup[1][i]
+		vx, vy, omega = self.ctr_in[0][i], self.ctr_in[1][i], self.ctr_in[2][i]
+		# Motion model of the relative state
+		self.G[0][0] = 1.
+		self.G[0][1] = (-vx*math.cos(phi) + vy*math.sin(phi))*TS
+		self.G[1][0] = -(1./pow(d,2.))*(-vx*math.cos(phi) + vy*math.sin(phi))*TS
+		self.G[1][1] = 1. + (1./d)*(vx*math.sin(phi) + vy*math.cos(phi))*TS
+		return 0
+
+
+	### Mod of angle ###
+	def mod_angle(self,x):
+		# Params
+		y = x
+		if x > np.pi:
+			y = x % np.pi
+		else:
+			if x <= -np.pi:
+				y = (x + 2*np.pi) % np.pi
+		return y
+
+
 
 
 
@@ -265,16 +399,17 @@ def main():
     ##### list of uavs
     ##### Number of agents are set here
     Names = ['uav0','uav1','uav2'] 
-
     # ROS loop rate, [Hz]
     rate = rospy.Rate(FREQ)
     initial_pos = [[0.0,0.0,3.,0.],[5.0,0.0,3.,2.3],[2.0,4.0,3.,-2.5]]
     # Controller 
     cnt = FormationControl(Names,rate,initial_pos)
-
+    ## Taking off
     cnt.Onboarding()
     cnt.fly()
 
+    ##Altitude stabilization
+    #################################
     k = 0
     is_z_ok = False
     while not (is_z_ok):
@@ -289,6 +424,7 @@ def main():
     	is_z_ok = is_ok
 
     i = 0
+    ################################
 
 
 
@@ -296,10 +432,13 @@ def main():
     	now = rospy.get_rostime()
     	rospy.loginfo("Current time %i %i", now.secs, now.nsecs)
     	# cnt.updateLocation()
-    	dv_1 = cnt.agents[0].process_img()
-    	dv_2 = cnt.agents[1].process_img()
-    	dv_3 = cnt.agents[2].process_img()
-    	cnt.formationController(dv_1, dv_2, dv_3)
+    	dv_1 = cnt.agents[0].process_img() # Pixel detection Gamma
+    	dv_2 = cnt.agents[1].process_img() # Pixel detection Gamma
+    	dv_3 = cnt.agents[2].process_img() # Pixel detection Gamma
+    	cnt.formationController(dv_1, dv_2, dv_3) # Controller algorithm
+    	cnt.idx_seq = cnt.idx_seq + 1 # Iteration index
+    	# Publish results
+    	cnt.pub_ekf.publish(cnt.x_Ekf_Pub)
     	rate.sleep()
 
 

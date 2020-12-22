@@ -41,6 +41,7 @@ TOPIC_SET_KSI =  '/ksi'
 TOPIC_SET_BETA =  '/beta'
 TOPIC_SET_ERROR =  '/error_dis'
 TOPIC_SET_DIS =  '/dis'
+TOPIC_EKF =  '/ekf'
 
 ### Images
 TOPIC_PUB = "/output/image_raw/compressed"
@@ -174,9 +175,9 @@ class Drone:
 
 
 
-	############################
+	#########################################################
 	## callback for camera Images
-	############################
+	#########################################################
 	def cb_image(self, ros_data):
 
 		''' Here images get converted and features detected'''
@@ -191,14 +192,15 @@ class Drone:
 		self.img =  image_np # assign image 		
 
 
-
-	## Image processing with YOLO
+	######### Image processing with YOLO #########################
+	##############################################################
 	def process_img(self):
 		names = 'uav.names'
+
 		CONF_THRESH, NMS_THRESH = 0.25, 0.25  # threshold values
-		############# Deep Larning Processing ##############
+		############# Deep Larning Processing ###################
 		# Load the network 
-		net = cv2.dnn.readNet('yolov3-tiny.cfg', '../../yolov3tiny_2000.weights')
+		net = cv2.dnn.readNet('yolov3-tiny.cfg', 'yolo/yolov3tiny_2000.weights')
 		# net = cv2.dnn.readNet('yolov3uav.cfg', '../../yolov3uav_2000.weights')
 		# net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV) # using Cuda/Cpu
 		# net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU) # using Cuda/Cpu
@@ -257,6 +259,8 @@ class Drone:
 		            self.gamma = self.u - width/2
 
 		return self.gamma
+
+
 
 
 	######### Engine Configurations Services ###############
