@@ -55,6 +55,8 @@ TOPIC_SETVELOCITY = '/mavros/setpoint_velocity/cmd_vel'
 TOPIC_MODELSTATE = '/gazebo/model_states'
 TOPIC_SET_MODELSTATE =  '/gazebo/set_model_state'
 TOPIC_EKF =  '/ekf'
+TOPIC_EKF2 =  '/ekf2'
+TOPIC_EKF3 =  '/ekf3'
 
 TOPIC_IMGCOMPRESSED = "/camera_red_iris/image_raw/compressed"
 
@@ -64,15 +66,15 @@ TS = 1.0/FREQ
 
 IS_MOVED = False
 INDEX_MOVED = 0
-
+MUL = 4
 
 ####################################
 ############## Params ##############
 def setParams():
-    rospy.set_param('/idx_Permit_EKF',2) # Scale ratio (1/anchor_sep)
-    rospy.set_param('/S_covariance',0.002) # Covariance
-    rospy.set_param('/R_covariance',0.002) # Process covariance
-    rospy.set_param('/Q_covariance',0.005) # Measurement covariance
+    rospy.set_param('/idx_Permit_EKF',2*MUL) # Scale ratio (1/anchor_sep)
+    rospy.set_param('/S_covariance',0.002*MUL) # Covariance
+    rospy.set_param('/R_covariance',0.002*MUL) # Process covariance
+    rospy.set_param('/Q_covariance',0.005*MUL) # Measurement covariance
 
 
 
@@ -102,6 +104,36 @@ class FormationControl:
 		# Filter Params
 		self.idx_seq = 0
 		self.r1 = 0.
+		self.r2 = 0.
+		self.r3 = 0.
+
+		self.s1 = 0.
+		self.s2 = 0.
+		self.s3 = 0.
+
+		self.x_1 = 0
+		self.x_2 = 0
+		self.x_3 = 0
+
+
+		self.y_1 = 0
+		self.y_2 = 0
+		self.y_3 = 0
+
+
+		self.rate1 = 0
+		self.rate2 = 0
+		self.rate3 = 0
+
+		self.gamma1 = 0
+		self.gamma2 = 0
+		self.gamma3 = 0		
+
+		self.sum1 = 0
+		self.sum2 = 0
+		self.sum3 = 0
+
+
 		self.cov = np.zeros((len(names),2,2)) # Covariance
 		for i in range(len(names)):
 			self.cov[i,:,:] = 0.002*np.identity(2) #rospy.get_param('/S_covariance')*np.identity(2)
@@ -115,6 +147,8 @@ class FormationControl:
 		self.y = np.array([[0.,0.,0.] , [0.,0.,0.]]) # Measurements
 		self.x_Ekf_Pub = Twist()
 
+		self.x_Ekf_Pub2 = Twist()
+		self.x_Ekf_Pub3 = Twist()
 		# initialization
 		self.setup()
 		# configuration
@@ -127,6 +161,9 @@ class FormationControl:
 	        	y = y+1
 	        	rate.sleep()
 		self.pub_ekf = rospy.Publisher(TOPIC_EKF, Twist) # error distance
+
+		self.pub_ekf2 = rospy.Publisher(TOPIC_EKF2, Twist) # R2
+		self.pub_ekf3 = rospy.Publisher(TOPIC_EKF3, Twist) # R3
 
 		# # configuration boarding
 		# self.Onboarding()
@@ -209,17 +246,21 @@ class FormationControl:
 	# update according to the local frame	
 	def formationController(self,dv_1,dv_2,dv_3):
 		# self.agents[0].model_state   --- gazebo model state
+		############################################
+		###### dv_1,dv_2,dv_3 are now array of Gamma
+
+
 		dr1 = self.dr1 
 		dr2 = self.dr2  
 		dr3 = self.dr3
 		# Measurements
 		scale_ratio = (self.fov/2)/(800/2.0)
 		#print(scale_ratio)
-		self.beta_1 = dv_1*scale_ratio #detct1.beta #
-		self.beta_2 = dv_2*scale_ratio # detct2.beta
-		self.beta_3 = dv_3*scale_ratio # detct3.beta #
+		self.beta_1 = dv_1[0]*scale_ratio #detct1.beta #
+		self.beta_2 = dv_2[0]*scale_ratio # detct2.beta
+		self.beta_3 = dv_3[0]*scale_ratio # detct3.beta #
 		print('Beta ',dv_1,dv_2,dv_3)
-		print('Beta ',dv_1*scale_ratio,dv_2*scale_ratio,dv_3*scale_ratio)
+		print('Beta ',dv_1[0]*scale_ratio,dv_2[0]*scale_ratio,dv_3[0]*scale_ratio)
 
 		noise = np.random.normal(0,0.1,1)  # noise
 		d1 = d2 = d3 = 4.    # desired distance between agents
@@ -281,6 +322,11 @@ class FormationControl:
 		rate2 = -self.k_psi*self.beta_2;
 		rate3 = -self.k_psi*self.beta_3;
 
+		# gamma
+		self.gamma1 = dv_1[0]
+		self.gamma2 = dv_1[1]
+		self.gamma3 = dv_1[2]
+
 		# Control inputs to be used in filter
 		self.ctr_in[0][0], self.ctr_in[1][0], self.ctr_in[2][0] = x_1, y_1, rate1
 		self.ctr_in[0][1], self.ctr_in[1][1], self.ctr_in[2][1] = x_2, y_2, rate2
@@ -297,7 +343,146 @@ class FormationControl:
 		self.agents[2].set_psi_beta(self.psi_3,self.beta_3,r3,s3)
 
 
+	def computeX(self,i,w):
+		# Compute X
+		# Formulate X = i*px(f - w) /f
+		px  = -7.656598* 10**-4
+		f = 0.3810
+		X = i * px * (f - w) / f
+		beta =  atan2(X,w)
+		return X,beta
 
+	iteration = 0
+	# Formation Controller with Real f and px
+	def formationController2(self,dv_1,dv_2,dv_3):
+		# self.agents[0].model_state   --- gazebo model state
+		############################################
+		###### dv_1,dv_2,dv_3 are now array of Gamma
+
+
+		dr1 = self.dr1 
+		dr2 = self.dr2  
+		dr3 = self.dr3
+		noise = np.random.normal(0,0.1,1)  # noise
+		d1 = d2 = d3 = 5.    # desired distance between agents
+		self.k_psi = 0.5 # 0.3;
+		eta = np.random.normal(0,0.1,3)
+
+		# Distances      
+		r1 =  hypot(dr1.x - dr2.x ,dr1.y - dr2.y ) +  eta[0] # Current distance Agent1 - Agent2
+		r2 =  hypot(dr2.x - dr3.x ,dr2.y - dr3.y ) +  eta[1]  # Current distance Agent2 - Agent3
+		r3 =  hypot(dr3.x - dr1.x ,dr3.y - dr1.y ) +  eta[2]  # Current distance Agent3 - Agent1
+		self.r1 = r1
+		self.r2 = r2
+		self.r3 = r3
+
+		# Measurements
+		scale_ratio = (self.fov/2)/(800/2.0)
+		#print(scale_ratio)
+		# beta and the distance from the center of the camera
+		X1,self.beta_1 = self.computeX(dv_1[0] ,r1) #dv_1[0]*scale_ratio #detct1.beta #
+		X2,self.beta_2 = self.computeX(dv_2[0] ,r2) #dv_2[0]*scale_ratio # detct2.beta
+		X2,self.beta_3 = self.computeX(dv_3[0] ,r3) #dv_3[0]*scale_ratio # detct3.beta #
+		
+		# print('Beta ',self.beta_1,self.beta_2,self.beta_3)
+		# print('Beta ',dv_1[0]*scale_ratio,dv_2[0]*scale_ratio,dv_3[0]*scale_ratio)
+
+		# print('Beta ',dv_1[0],dv_2[0],dv_3[0])
+
+
+
+
+		# Filter params
+		self.y[0,0], self.y[1,0] = r1, self.beta_1
+		self.y[0,1], self.y[1,1] = r2, self.beta_2
+		self.y[0,2], self.y[1,2] = r3, self.beta_3
+
+		# Apply Filter
+		for i in range(len(self.dronesName)):
+			self.filter_ekf(i)
+		# Angles
+		# the delta angle inside the triangle 
+		self.alpha_1 =  np.arccos((r3*r3 + r1*r1 - r2*r2)/ (2*r3*r1))
+		self.alpha_2 =  np.arccos((r1*r1 + r2*r2 - r3*r3)/ (2*r1*r2))
+		self.alpha_3 =  np.arccos((r2*r2 + r3*r3 - r1*r1)/ (2*r2*r3))
+
+		# Controller
+		self.s1 =  -(d1 - self.x_Ekf[0,0]) # e1 error distance
+		self.s2 =  -(d2 - self.x_Ekf[0,1]) # e2 error distance
+		self.s3 =  -(d3 - self.x_Ekf[0,2]) # e3 error distance
+		self.sum1 += self.s1
+		self.sum2 += self.s2
+		self.sum3 += self.s3
+
+		# Agents from the Agent_node 
+		# Instance of Agent_node for R1,R2,R3
+		R1 = self.agents[0].position.pose.position # R1 
+		R2 = self.agents[1].position.pose.position # R2
+		R3 = self.agents[2].position.pose.position # R3
+
+		# gamma
+		self.gamma1 = dv_1[0]
+		self.gamma2 = dv_2[0]
+		self.gamma3 = dv_3[0]		
+
+		# Control signals
+		#u_1 = np.array([ s1 * sin(self.beta_1),s1 * cos(self.beta_1)])
+		#u_2 = np.array([ s2 * sin(self.beta_2),s2 * cos(self.beta_2)])
+		#u_3 = np.array([ s3 * sin(self.beta_3),s3 * cos(self.beta_3)])
+
+		u_1 = np.array([ self.s1 * sin(self.x_Ekf[1,0]),self.s1 * cos(self.x_Ekf[1,0])])
+		u_2 = np.array([ self.s2 * sin(self.x_Ekf[1,1]),self.s2 * cos(self.x_Ekf[1,1])])
+		u_3 = np.array([ self.s3 * sin(self.x_Ekf[1,2]),self.s3 * cos(self.x_Ekf[1,2])])
+
+		self.iteration += 1
+
+		summ = (self.sum1**2 + self.sum2**2 + self.sum3**2)/3
+
+		print('ss',self.iteration ,sqrt(summ)/self.iteration)
+
+		# For Local pose
+		self.x_1 = u_1[0]*TS #*self.k_psi
+		self.y_1 = u_1[1]*TS #*self.k_psi
+
+		self.x_2 = u_2[0]*TS #*self.k_psi
+		self.y_2 = u_2[1]*TS #*self.k_psi
+		        
+		self.x_3 = u_3[0]*TS #*self.k_psi
+		self.y_3 = u_3[1]*TS #*self.k_psi
+
+
+		# Next yaw rates 
+		self.rate1 = -self.k_psi*self.beta_1;  
+		self.rate2 = -self.k_psi*self.beta_2;
+		self.rate3 = -self.k_psi*self.beta_3;
+
+		# Control inputs to be used in filter
+		self.ctr_in[0][0], self.ctr_in[1][0], self.ctr_in[2][0] = self.x_1, self.y_1, self.rate1
+		self.ctr_in[0][1], self.ctr_in[1][1], self.ctr_in[2][1] = self.x_2, self.y_2, self.rate2
+		self.ctr_in[0][2], self.ctr_in[1][2], self.ctr_in[2][2] = self.x_3, self.y_3, self.rate3
+
+		# Next location publications
+		self.agents[0].setPoint(self.x_1 ,self.y_1,3.,self.rate1)
+		self.agents[1].setPoint(self.x_2 ,self.y_2,3.,self.rate2)
+		self.agents[2].setPoint(self.x_3 ,self.y_3,3.,self.rate3)
+
+
+
+
+
+	def pub_rosvars(self):
+		# # publish psi and beta --bag
+
+		self.agents[0].set_psi_beta(self.psi_1,self.beta_1,self.r1,self.s1,self.gamma1)
+		self.agents[1].set_psi_beta(self.psi_2,self.beta_2,self.r2,self.s2,self.gamma2)
+		self.agents[2].set_psi_beta(self.psi_3,self.beta_3,self.r3,self.s3,self.gamma2)
+
+
+
+	def pub_velocities(self):
+		self.agents[0].set_velocities(self.x_1,self.y_1,self.rate1)
+		self.agents[1].set_velocities(self.x_2,self.y_2,self.rate2)
+		self.agents[2].set_velocities(self.x_3,self.y_3,self.rate3)
 
 
 
@@ -323,7 +508,7 @@ class FormationControl:
 		self.y_mdl = self.mup[:,i]
 		# Difference between current and predicted measurements
 		I = np.array([[self.y[0,i] - self.mup[0,i]] , [self.y[1,i] - self.mup[1,i]]])
-		print 'ekf: ', self.x_Ekf[:,i]
+		# print 'ekf: ', self.x_Ekf[:,i]
 		# Update belief
 		ekf_int = np.array([[self.mup[0,i]],[self.mup[1,i]]]) + np.matmul(K , I)
 		self.x_Ekf[0][i], self.x_Ekf[1][i] = ekf_int[0], ekf_int[1]
@@ -333,11 +518,26 @@ class FormationControl:
 
 		# Update covariance
 		self.cov[i,:,:] = np.matmul((np.identity(2) - np.matmul(K , self.H)) , Sp)
+
 		# Publish the estimated state
 		self.x_Ekf_Pub.linear.x = self.r1
 		self.x_Ekf_Pub.linear.y = self.x_Ekf[0][0]
 		self.x_Ekf_Pub.angular.x = self.beta_1
 		self.x_Ekf_Pub.angular.y = self.x_Ekf[1][0]
+
+		# Publish the estimated state
+		# For other Agent
+		self.x_Ekf_Pub2.linear.x = self.r2
+		self.x_Ekf_Pub2.linear.y = self.x_Ekf[0][1]
+		self.x_Ekf_Pub2.angular.x = self.beta_2
+		self.x_Ekf_Pub2.angular.y = self.x_Ekf[1][1]
+
+		self.x_Ekf_Pub3.linear.x = self.r3
+		self.x_Ekf_Pub3.linear.y = self.x_Ekf[0][2]
+		self.x_Ekf_Pub3.angular.x = self.beta_3
+		self.x_Ekf_Pub3.angular.y = self.x_Ekf[1][2]		
+
+
 		#self.header_main.seq = self.idx_seq
 		#self.header_main.stamp = rospy.Time.now() # Current time as rosTime
 		#print self.x_Ekf
@@ -426,19 +626,33 @@ def main():
     i = 0
     ################################
 
+    gz_state_it  = 0 # For gazebo states every 2
 
 
     while not rospy.is_shutdown():
     	now = rospy.get_rostime()
-    	rospy.loginfo("Current time %i %i", now.secs, now.nsecs)
+    	#rospy.loginfo("Current time %i %i", now.secs, now.nsecs)
     	# cnt.updateLocation()
     	dv_1 = cnt.agents[0].process_img() # Pixel detection Gamma
     	dv_2 = cnt.agents[1].process_img() # Pixel detection Gamma
     	dv_3 = cnt.agents[2].process_img() # Pixel detection Gamma
-    	cnt.formationController(dv_1, dv_2, dv_3) # Controller algorithm
+    	cnt.formationController2(dv_1, dv_2, dv_3) # Controller algorithm
     	cnt.idx_seq = cnt.idx_seq + 1 # Iteration index
-    	# Publish results
+    	# Publish results ekfs
     	cnt.pub_ekf.publish(cnt.x_Ekf_Pub)
+    	cnt.pub_ekf2.publish(cnt.x_Ekf_Pub2)
+    	cnt.pub_ekf3.publish(cnt.x_Ekf_Pub3)
+    	cnt.pub_rosvars()
+    	cnt.pub_velocities()
+
+        # gazeboModel State as an array
+        gz_state_it  = gz_state_it +1 
+        cnt.agents[0].pub_gazeboStates(cnt.agents[0].model_state)
+
+
+        # if gz_state_it % 2 == 0 :
+             
+
     	rate.sleep()
 
 

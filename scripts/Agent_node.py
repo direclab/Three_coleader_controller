@@ -42,6 +42,12 @@ TOPIC_SET_BETA =  '/beta'
 TOPIC_SET_ERROR =  '/error_dis'
 TOPIC_SET_DIS =  '/dis'
 TOPIC_EKF =  '/ekf'
+TOPIC_GAMMA =  '/gamma'
+
+
+TOPIC_SET_VX =  '/vx'
+TOPIC_SET_VY =  '/vy'
+TOPIC_SET_YAWRATE =  '/yawrate'
 
 ### Images
 TOPIC_PUB = "/output/image_raw/compressed"
@@ -49,7 +55,8 @@ TOPIC_CAMINFO = "/camera_red_iris/camera_info"
 TOPIC_IMGCOMPRESSED = "/camera_red_iris/image_raw/compressed"
 
 ########################################################
-
+#rosbag record --duration=5m -e "(.*)(local_position/pose|ekf|ekf2|ekf3|ksi|beta|error_dis|dis|GazeboStates|vx|vy|yawrate)" 
+#rosbag record -e -x "(.*)(/iris|)(.*)"
 
 FREQ = 10
 TS = 1/FREQ
@@ -74,7 +81,7 @@ class Drone:
 		self.u = None
 		self.v = None
 		self.d = ''
-		self.gamma =  -0.0001   # initial     
+		self.gamma =  [-0.0001]   # initial     
 		self.img = None
 		self.output_layers = None
 		self.net  = None
@@ -108,7 +115,13 @@ class Drone:
 		self.sp_beta = rospy.Publisher(self.name + TOPIC_SET_BETA, Float32) # beta
 		self.sp_dis = rospy.Publisher(self.name + TOPIC_SET_DIS, Float32) # dis
 		self.sp_error = rospy.Publisher(self.name + TOPIC_SET_ERROR, Float32) # error distance
+		self.sp_gamma = rospy.Publisher(self.name + TOPIC_GAMMA, Float32) # gamma
 
+		self.sp_vx = rospy.Publisher(self.name + TOPIC_SET_VX, Float32) # VX
+		self.sp_vy = rospy.Publisher(self.name + TOPIC_SET_VY, Float32) # VY
+		self.sp_yawrate = rospy.Publisher(self.name + TOPIC_SET_YAWRATE, Float32) # yaw
+
+		self.pub_gazebo = rospy.Publisher( 'GazeboStates', ModelStates, queue_size=1)
 
 
 	######### Publishers ###############
@@ -140,13 +153,17 @@ class Drone:
 		return sp
 
 	# Publish for rosbag
-	def set_psi_beta(self,psi,beta,dis,error):
+	def set_psi_beta(self,psi,beta,dis,error,gamma):
 		self.sp_psi.publish(psi)
 		self.sp_beta.publish(beta)
 		self.sp_dis.publish(dis)
 		self.sp_error.publish(error)
+		self.sp_gamma.publish(gamma)
 
-
+	def set_velocities(self,vx,vy,yawrate):
+		self.sp_vx.publish(vx)
+		self.sp_vy.publish(vy)
+		self.sp_yawrate.publish(yawrate)
 
 	######### Callbacks ###############
 	########################################################
@@ -154,6 +171,10 @@ class Drone:
 	# callBack gazebo Model states
 	def cb_model_state(self,state):
 		self.model_state = state
+
+	# Publish RosBags Gazebo States
+	def pub_gazeboStates(self,data):
+		self.pub_gazebo.publish(data)
 
 
 	# callback for mavros the position
@@ -242,21 +263,27 @@ class Drone:
 		confident bounding boxes '''
 
 		indices = cv2.dnn.NMSBoxes(b_boxes, confidences, CONF_THRESH, NMS_THRESH)
+		
+
 		if len(indices) > 0 :
 		    indices = cv2.dnn.NMSBoxes(b_boxes, confidences, CONF_THRESH, NMS_THRESH).flatten().tolist()
+		    # When there is new detection 
+		    self.gamma = [] # clear Previous gammas
 		    # Draw the filtered bounding boxes with their class to the image
 		    with open(names, "r") as f:
 		        classes = [line.strip() for line in f.readlines()]
 		    colors = np.random.uniform(0, 255, size=(3, 3))
 		    # if len(indices) > 1 : # multiple object detection
+
 		    for index in indices:
 		        x, y, w, h = b_boxes[index]
 		        self.detected = True # 
 		        self.u = x + w / 2 
 		        self.v =  y + h /2 
+		        self.gamma.append(self.u - width/2)
 
-		        if self.detected == True :
-		            self.gamma = self.u - width/2
+		        # if self.detected == True :
+		        #     self.gamma = self.u - width/2
 
 		return self.gamma
 
