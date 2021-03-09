@@ -221,7 +221,7 @@ class Drone:
 		CONF_THRESH, NMS_THRESH = 0.25, 0.25  # threshold values
 		############# Deep Larning Processing ###################
 		# Load the network 
-		net = cv2.dnn.readNet('yolov3-tiny.cfg', 'yolo/yolov3tiny_2000.weights')
+		net = cv2.dnn.readNet('yolo/yolov3-tiny.cfg', 'yolo/yolov3tiny_2000.weights')
 		# net = cv2.dnn.readNet('yolov3uav.cfg', '../../yolov3uav_2000.weights')
 		# net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV) # using Cuda/Cpu
 		# net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU) # using Cuda/Cpu
