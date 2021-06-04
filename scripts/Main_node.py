@@ -262,6 +262,8 @@ class FormationControl:
 		print('Beta ',dv_1,dv_2,dv_3)
 		print('Beta ',dv_1[0]*scale_ratio,dv_2[0]*scale_ratio,dv_3[0]*scale_ratio)
 
+
+
 		noise = np.random.normal(0,0.1,1)  # noise
 		d1 = d2 = d3 = 4.    # desired distance between agents
 		self.k_psi = 0.3 # 0.2;
@@ -353,6 +355,8 @@ class FormationControl:
 		return X,beta
 
 	iteration = 0
+
+
 	# Formation Controller with Real f and px
 	def formationController2(self,dv_1,dv_2,dv_3):
 		# self.agents[0].model_state   --- gazebo model state
@@ -372,6 +376,7 @@ class FormationControl:
 		r1 =  hypot(dr1.x - dr2.x ,dr1.y - dr2.y ) +  eta[0] # Current distance Agent1 - Agent2
 		r2 =  hypot(dr2.x - dr3.x ,dr2.y - dr3.y ) +  eta[1]  # Current distance Agent2 - Agent3
 		r3 =  hypot(dr3.x - dr1.x ,dr3.y - dr1.y ) +  eta[2]  # Current distance Agent3 - Agent1
+
 		self.r1 = r1
 		self.r2 = r2
 		self.r3 = r3
@@ -386,7 +391,6 @@ class FormationControl:
 		
 		# print('Beta ',self.beta_1,self.beta_2,self.beta_3)
 		# print('Beta ',dv_1[0]*scale_ratio,dv_2[0]*scale_ratio,dv_3[0]*scale_ratio)
-
 		# print('Beta ',dv_1[0],dv_2[0],dv_3[0])
 
 
@@ -438,7 +442,7 @@ class FormationControl:
 
 		summ = (self.sum1**2 + self.sum2**2 + self.sum3**2)/3
 
-		print('ss',self.iteration ,sqrt(summ)/self.iteration)
+		#print('ss',self.iteration ,sqrt(summ)/self.iteration)
 
 		# For Local pose
 		self.x_1 = u_1[0]*TS #*self.k_psi

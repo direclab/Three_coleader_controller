@@ -54,6 +54,13 @@ class Image_node:
         self.net  = None
         self.width  = 800
 
+        ### CNN for comparison 
+        self.a1 = None
+        self.a2 = None
+
+
+
+
         self.detected = True # should update the image in case of false
         '''Initialize ros publisher, ros subscriber'''
         # topic where we publish
@@ -147,6 +154,15 @@ class Image_node:
                 self.detected = True # 
                 self.u = x + w / 2 
                 self.v =  y + h /2 
+
+                point_a1 = (self.u - w/2, self.v)
+                point_a2 = (self.u + w/2, self.v)
+                self.a1 = self.pinhole_camera_model.projectPixelTo3dRay(point_a1)
+                self.a2 = self.pinhole_camera_model.projectPixelTo3dRay(point_a2)
+
+                print self.a1, self.a2
+
+
 
                 if self.detected == True :
                     self.gamma = self.u - width/2

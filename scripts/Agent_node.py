@@ -13,6 +13,7 @@ from image_geometry import PinholeCameraModel
 from std_msgs.msg import Float32
 #scipy /numpy
 from scipy.spatial import distance
+from scipy.linalg import norm
 # OpenCV
 import cv2
 
@@ -92,7 +93,14 @@ class Drone:
 		self.pinhole_camera_model = PinholeCameraModel()
 		camera_info_topic = self.tag + TOPIC_CAMINFO
 		camera_info = rospy.wait_for_message(camera_info_topic, CameraInfo)
-		self.pinhole_camera_model.fromCameraInfo(camera_info) 
+		self.pinhole_camera_model.fromCameraInfo(camera_info)
+
+		### CNN for comparison 
+		self.a1 = None
+		self.a2 = None
+		self.r  = 0.47/2 # rotor/wing  size
+		self.l = 0.0  # Distance
+
 
 		#################### Setting the callBacks ####################
 		self.position = PoseStamped()  # current position
@@ -142,14 +150,14 @@ class Drone:
 	def generatePosition(self,x,y,z=3.0,yaw=0.):
 		''' instantiate setpoint msg '''
 		sp = PositionTarget()
-		sp.velocity.x =  x
-		sp.velocity.y =  y
+		sp.velocity.x =  0# x
+		sp.velocity.y =  0#y
 		#sp.velocity.z = 0.
 		sp.type_mask = PositionTarget.IGNORE_AFX + PositionTarget.IGNORE_AFY + PositionTarget.IGNORE_AFZ  + PositionTarget.IGNORE_YAW  + PositionTarget.IGNORE_PX + PositionTarget.IGNORE_PY  
 		# sp.yaw =  yaw     # the yaw value
-		sp.yaw_rate = yaw	# the yaw velocity	 																																																	
+		sp.yaw_rate = 0 #yaw	# the yaw velocity	 																																																	
 		sp.coordinate_frame = 8
-		sp.position.z = z
+		sp.position.z = 1. # z
 		return sp
 
 	# Publish for rosbag
@@ -216,7 +224,7 @@ class Drone:
 	######### Image processing with YOLO #########################
 	##############################################################
 	def process_img(self):
-		names = 'uav.names'
+		names = 'yolo/uav.names'
 
 		CONF_THRESH, NMS_THRESH = 0.25, 0.25  # threshold values
 		############# Deep Larning Processing ###################
@@ -280,12 +288,32 @@ class Drone:
 		        self.detected = True # 
 		        self.u = x + w / 2 
 		        self.v =  y + h /2 
+
+		        # point_a1 = (self.u - w/2, self.v)
+		        # point_a2 = (self.u + w/2, self.v)
+		        # self.a1 = self.pinhole_camera_model.projectPixelTo3dRay(point_a1)
+		        # self.a2 = self.pinhole_camera_model.projectPixelTo3dRay(point_a2)
+
+		        # # print self.a2
+		        # # print np.linalg.norm(self.a2)
+		        # # print norm(self.a2)
+
+		        # self.l = sqrt(2 * self.r) / sqrt(1 - (np.dot(self.a1,self.a2)/(np.linalg.norm(self.a1)*np.linalg.norm(self.a2) ) ))
+		        # ac =  np.add(self.a1, self.a2)/2
+
+		        # C = self.l * ac /norm(ac)
+
+		        # print self.tag , self.l , C
+
+		        # print self.pinhole_camera_model.projectionMatrix()
+		        # print self.pinhole_camera_model.fx()
+
 		        self.gamma.append(self.u - width/2)
 
 		        # if self.detected == True :
 		        #     self.gamma = self.u - width/2
 
-		return self.gamma
+		return self.gamma 
 
 
 
