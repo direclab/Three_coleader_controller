@@ -17,8 +17,7 @@ The majority of the code is written in Python 2.
 To launch three drones in Gazebo:
 
 ```bash
-roslaunch Three_coleader_controller
- main.launch
+roslaunch Three_coleader_controller main.launch
 ```
 
 ## Citation
@@ -36,5 +35,3 @@ If you use this work in an academic context, please cite the following article:
   doi={10.1109/TMECH.2021.3110660}}
   ```
   
-  ## Acknowledgments
-The entire responsibility of the article belongs to the owner of this article. The financial support received from TÜB ̇ITAK does not mean that the content of the publication is approved in a scientific sense by TÜB ̇ITAK.
